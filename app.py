@@ -23,12 +23,16 @@ def initialize_session_state():
         st.session_state.assignments = {}
     if 'manual_splits' not in st.session_state:
         st.session_state.manual_splits = {}
+    if 'coupon_discount' not in st.session_state:
+        st.session_state.coupon_discount = 0
+    if 'miscellaneous_charges' not in st.session_state:
+        st.session_state.miscellaneous_charges = 0
     if 'step' not in st.session_state:
         st.session_state.step = 1
 
 def reset_session():
     """Reset all session state variables"""
-    for key in ['bill_items', 'people', 'assignments', 'manual_splits']:
+    for key in ['bill_items', 'people', 'assignments', 'manual_splits', 'coupon_discount', 'miscellaneous_charges']:
         if key in st.session_state:
             del st.session_state[key]
     st.session_state.step = 1
@@ -39,6 +43,34 @@ def image_to_base64(image):
     image.save(buffer, format='JPEG')
     img_str = base64.b64encode(buffer.getvalue()).decode()
     return img_str
+
+def auto_split_remaining(item_amount, assigned_people, changed_person, changed_amount):
+    """
+    Automatically distribute remaining amount among other people when one person changes their amount
+    
+    Args:
+        item_amount (float): Total amount of the item
+        assigned_people (list): List of people assigned to this item
+        changed_person (str): Person who changed their amount
+        changed_amount (float): New amount for the changed person
+        
+    Returns:
+        dict: Dictionary with amounts for each person
+    """
+    remaining_amount = item_amount - changed_amount
+    other_people = [p for p in assigned_people if p != changed_person]
+    
+    if len(other_people) == 0:
+        return {changed_person: changed_amount}
+    
+    # Distribute remaining amount equally among other people
+    per_person_amount = remaining_amount / len(other_people)
+    
+    result = {changed_person: changed_amount}
+    for person in other_people:
+        result[person] = round(per_person_amount, 2)
+    
+    return result
 
 def main():
     initialize_session_state()
@@ -173,6 +205,42 @@ def main():
         st.header("Step 4: Assign Items to People")
         st.markdown("For each item, select who consumed it. Items can be shared among multiple people.")
         
+        # Coupon Discount Section
+        st.subheader("🎟️ Coupon/Discount")
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            coupon_discount = st.number_input(
+                "Discount Percentage (%)",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(st.session_state.coupon_discount),
+                step=0.1,
+                key="coupon_discount_input"
+            )
+            st.session_state.coupon_discount = coupon_discount
+        
+        with col2:
+            if coupon_discount > 0:
+                total_bill_amount = sum(item['amount'] for item in st.session_state.bill_items)
+                discount_amount = (total_bill_amount * coupon_discount) / 100
+                st.metric("Discount Amount", f"₹{discount_amount:.2f}")
+        
+        # Miscellaneous Charges Section
+        st.subheader("💰 Miscellaneous Charges")
+        misc_charges = st.number_input(
+            "Additional charges (₹)",
+            min_value=0.0,
+            value=float(st.session_state.miscellaneous_charges),
+            step=0.01,
+            key="misc_charges_input"
+        )
+        st.session_state.miscellaneous_charges = misc_charges
+        
+        if misc_charges > 0:
+            st.info(f"₹{misc_charges:.2f} will be split equally among all {len(st.session_state.people)} people (₹{misc_charges/len(st.session_state.people):.2f} each)")
+        
+        st.markdown("---")
+        
         if st.session_state.bill_items and st.session_state.people:
             for i, item in enumerate(st.session_state.bill_items):
                 with st.expander(f"**{item['item']}** - ₹{item['amount']}", expanded=True):
@@ -197,20 +265,48 @@ def main():
                         
                         if use_manual_split:
                             st.write("Enter custom amounts (must sum to ₹{:.2f}):".format(item['amount']))
-                            manual_amounts = {}
-                            total_manual = 0
+                            st.caption("💡 Tip: When you change one person's amount and press Enter, the remaining amount will be automatically distributed among others!")
                             
-                            for person in assigned_people:
-                                amount = st.number_input(
-                                    f"{person}:",
-                                    min_value=0.0,
-                                    max_value=float(item['amount']),
-                                    value=item['amount'] / len(assigned_people),
-                                    step=0.01,
-                                    key=f"manual_{i}_{person}"
-                                )
-                                manual_amounts[person] = amount
-                                total_manual += amount
+                            # Initialize manual amounts if not exists
+                            if f"item_{i}" not in st.session_state.manual_splits:
+                                st.session_state.manual_splits[f"item_{i}"] = {
+                                    person: item['amount'] / len(assigned_people) 
+                                    for person in assigned_people
+                                }
+                            
+                            manual_amounts = st.session_state.manual_splits[f"item_{i}"].copy()
+                            
+                            # Create input fields for each person
+                            for j, person in enumerate(assigned_people):
+                                col1, col2 = st.columns([3, 1])
+                                with col1:
+                                    amount = st.number_input(
+                                        f"{person}:",
+                                        min_value=0.0,
+                                        max_value=float(item['amount']),
+                                        value=manual_amounts.get(person, item['amount'] / len(assigned_people)),
+                                        step=0.01,
+                                        key=f"manual_{i}_{person}"
+                                    )
+                                    
+                                    # Check if this person's amount changed
+                                    if amount != manual_amounts.get(person, 0):
+                                        # Auto-split remaining amount
+                                        auto_split = auto_split_remaining(
+                                            item['amount'], 
+                                            assigned_people, 
+                                            person, 
+                                            amount
+                                        )
+                                        manual_amounts = auto_split
+                                        st.session_state.manual_splits[f"item_{i}"] = auto_split
+                                        st.success(f"✅ Auto-split applied! Remaining ₹{item['amount'] - amount:.2f} distributed among others.")
+                                        st.rerun()
+                                
+                                with col2:
+                                    st.metric("", f"₹{manual_amounts.get(person, 0):.2f}")
+                            
+                            total_manual = sum(manual_amounts.values())
                             
                             if abs(total_manual - item['amount']) > 0.01:
                                 st.error(f"⚠️ Amounts must sum to ₹{item['amount']:.2f} (current: ₹{total_manual:.2f})")
@@ -255,21 +351,32 @@ def main():
                 st.session_state.bill_items,
                 st.session_state.people,
                 st.session_state.assignments,
-                st.session_state.manual_splits
+                st.session_state.manual_splits,
+                st.session_state.coupon_discount,
+                st.session_state.miscellaneous_charges
             )
             
             # Display results
             st.subheader("💰 Final Split")
             
-            # Create results dataframe
-            results_data = []
-            total_bill = 0
+            # Calculate totals for display
+            total_bill = sum(splits.values())
+            original_total = sum(item['amount'] for item in st.session_state.bill_items)
+            discount_amount = (original_total * st.session_state.coupon_discount) / 100
             
-            for person, amount in splits.items():
-                results_data.append({"Person": person, "Amount": f"₹{amount:.2f}"})
-                total_bill += amount
+            # Show bill summary
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Original Total", f"₹{original_total:.2f}")
+            with col2:
+                if st.session_state.coupon_discount > 0:
+                    st.metric("Discount Applied", f"-₹{discount_amount:.2f}")
+                else:
+                    st.metric("Discount Applied", "₹0.00")
+            with col3:
+                st.metric("Final Total", f"₹{total_bill:.2f}")
             
-            # Display in columns
+            # Display individual splits in columns
             cols = st.columns(len(st.session_state.people))
             for i, (person, amount) in enumerate(splits.items()):
                 with cols[i]:
@@ -279,32 +386,66 @@ def main():
                     )
             
             # Summary message
-            st.success(
-                f"**Here's your bill split! 🍽️**\n\n" +
-                ", ".join([f"{person} owes ₹{amount:.2f}" for person, amount in splits.items()]) +
-                f"\n\n**Total Bill: ₹{total_bill:.2f}**\n\nLet's settle up when we meet next! 😄"
-            )
+            summary_parts = [f"{person} owes ₹{amount:.2f}" for person, amount in splits.items()]
+            
+            summary_text = f"**Here's your bill split! 🍽️**\n\n" + ", ".join(summary_parts)
+            
+            if st.session_state.coupon_discount > 0:
+                summary_text += f"\n\n**🎟️ {st.session_state.coupon_discount}% discount applied!**"
+            
+            if st.session_state.miscellaneous_charges > 0:
+                summary_text += f"\n\n**💰 ₹{st.session_state.miscellaneous_charges:.2f} miscellaneous charges included**"
+            
+            summary_text += f"\n\n**Total Bill: ₹{total_bill:.2f}**\n\nLet's settle up when we meet next! 😄"
+            
+            st.success(summary_text)
             
             # Detailed breakdown
             with st.expander("📊 Detailed Breakdown", expanded=False):
                 st.subheader("Item-wise Split")
                 
+                # Show discount and miscellaneous charges info
+                if st.session_state.coupon_discount > 0 or st.session_state.miscellaneous_charges > 0:
+                    st.write("**Bill Adjustments:**")
+                    if st.session_state.coupon_discount > 0:
+                        st.write(f"  • Discount ({st.session_state.coupon_discount}%): -₹{discount_amount:.2f}")
+                    if st.session_state.miscellaneous_charges > 0:
+                        st.write(f"  • Miscellaneous charges: +₹{st.session_state.miscellaneous_charges:.2f}")
+                    st.write("")
+                
                 for i, item in enumerate(st.session_state.bill_items):
                     assigned_people = st.session_state.assignments.get(f"item_{i}", [])
                     if assigned_people:
+                        # Calculate discounted item amount
+                        item_discount = (item['amount'] * st.session_state.coupon_discount) / 100
+                        discounted_item_amount = item['amount'] - item_discount
+                        
                         st.write(f"**{item['item']}** (₹{item['amount']:.2f})")
+                        if st.session_state.coupon_discount > 0:
+                            st.write(f"  *After {st.session_state.coupon_discount}% discount: ₹{discounted_item_amount:.2f}*")
                         
                         if f"item_{i}" in st.session_state.manual_splits:
                             # Manual split
                             manual_split = st.session_state.manual_splits[f"item_{i}"]
+                            total_manual = sum(manual_split.values())
+                            
                             for person, amount in manual_split.items():
-                                st.write(f"  • {person}: ₹{amount:.2f} (custom)")
+                                # Apply discount proportionally to manual split
+                                discounted_amount = (amount / total_manual) * discounted_item_amount if total_manual > 0 else 0
+                                st.write(f"  • {person}: ₹{discounted_amount:.2f} (custom)")
                         else:
                             # Equal split
-                            per_person = item['amount'] / len(assigned_people)
+                            per_person = discounted_item_amount / len(assigned_people)
                             for person in assigned_people:
                                 st.write(f"  • {person}: ₹{per_person:.2f}")
                         st.write("")
+                
+                # Show miscellaneous charges breakdown
+                if st.session_state.miscellaneous_charges > 0:
+                    st.write("**Miscellaneous Charges:**")
+                    per_person_misc = st.session_state.miscellaneous_charges / len(st.session_state.people)
+                    for person in st.session_state.people:
+                        st.write(f"  • {person}: ₹{per_person_misc:.2f}")
             
             # Navigation buttons
             col1, col2 = st.columns([1, 1])

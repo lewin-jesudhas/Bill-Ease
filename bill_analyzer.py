@@ -34,7 +34,7 @@ class BillAnalyzer:
             2. Ignore: headers, restaurant info, taxes, service charges, totals, thank you notes
             3. Clean up OCR mistakes (e.g., "Bulter Nan" → "Butter Naan")
             4. Ensure all prices are numbers (remove currency symbols)
-            5. If quantity is mentioned, extract individual item price
+            5. If quantity is mentioned, extract individual item amount
             
             Return ONLY a JSON array in this exact format:
             [
@@ -57,7 +57,7 @@ class BillAnalyzer:
             
             # Make API call to GPT Vision
             response = self.client.chat.completions.create(
-                model="gpt-5",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {

@@ -2,7 +2,7 @@ class SplitCalculator:
     def __init__(self):
         pass
     
-    def calculate_splits(self, bill_items, people, assignments, manual_splits=None):
+    def calculate_splits(self, bill_items, people, assignments, manual_splits=None, coupon_discount=0, miscellaneous_charges=0):
         """
         Calculate how much each person owes based on item assignments
         
@@ -11,6 +11,8 @@ class SplitCalculator:
             people (list): List of people names
             assignments (dict): Dict mapping item indices to list of people
             manual_splits (dict): Optional manual split overrides
+            coupon_discount (float): Discount percentage (0-100)
+            miscellaneous_charges (float): Additional charges to split among all
             
         Returns:
             dict: Dictionary mapping person names to amounts owed
@@ -21,7 +23,14 @@ class SplitCalculator:
         # Initialize splits for each person
         splits = {person: 0.0 for person in people}
         
-        # Process each item
+        # Calculate total bill amount before discount
+        total_bill_amount = sum(item['amount'] for item in bill_items)
+        
+        # Apply discount to total bill
+        discount_amount = (total_bill_amount * coupon_discount) / 100
+        discounted_total = total_bill_amount - discount_amount
+        
+        # Process each item with discount applied proportionally
         for i, item in enumerate(bill_items):
             item_key = f"item_{i}"
             assigned_people = assignments.get(item_key, [])
@@ -29,21 +38,33 @@ class SplitCalculator:
             if not assigned_people:
                 continue
             
-            amount = float(item['amount'])
+            # Apply discount proportionally to this item
+            item_discount = (item['amount'] * coupon_discount) / 100
+            discounted_item_amount = item['amount'] - item_discount
             
             # Check if there's a manual split for this item
             if item_key in manual_splits:
-                # Use manual split amounts
+                # Use manual split amounts (apply discount proportionally)
                 manual_amounts = manual_splits[item_key]
+                total_manual = sum(manual_amounts.values())
+                
                 for person, person_amount in manual_amounts.items():
                     if person in splits:
-                        splits[person] += float(person_amount)
+                        # Apply discount proportionally to manual split
+                        discounted_person_amount = (person_amount / total_manual) * discounted_item_amount if total_manual > 0 else 0
+                        splits[person] += discounted_person_amount
             else:
-                # Equal split among assigned people
-                per_person = amount / len(assigned_people)
+                # Equal split among assigned people (with discount applied)
+                per_person = discounted_item_amount / len(assigned_people)
                 for person in assigned_people:
                     if person in splits:
                         splits[person] += per_person
+        
+        # Add miscellaneous charges equally among all people
+        if miscellaneous_charges > 0:
+            per_person_misc = miscellaneous_charges / len(people)
+            for person in people:
+                splits[person] += per_person_misc
         
         # Round to 2 decimal places
         for person in splits:
