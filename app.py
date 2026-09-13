@@ -106,7 +106,7 @@ def main():
         if uploaded_file is not None:
             # Display the uploaded image
             image = Image.open(uploaded_file)
-            st.image(image, caption="Uploaded Bill", use_column_width=True)
+            st.image(image, caption="Uploaded Bill", width="stretch")
             
             if st.button("🔍 Analyze Bill", type="primary"):
                 with st.spinner("Analyzing bill with AI... Please wait."):
